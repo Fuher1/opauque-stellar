@@ -14,6 +14,65 @@ import {
   u32ToScVal,
 } from "../rpc/scval";
 
+export interface SchemaRecord {
+  schemaId: Uint8Array;
+  authority: string;
+  resolver: string;
+  revocable: boolean;
+  name: string;
+  fieldDefinitions: string;
+  version: number;
+  createdAt: number;
+  schemaExpiryLedger: number;
+  deprecated: boolean;
+}
+
+export interface AttestationRecord {
+  uid: Uint8Array;
+  schemaId: Uint8Array;
+  issuer: string;
+  stealthAddressHash: Uint8Array;
+  data: Uint8Array;
+  createdAt: number;
+  expirationLedger: number;
+  revocationLedger: number;
+  refUid: Uint8Array;
+  issuanceSequence: bigint;
+}
+
+function field<T>(raw: Record<string, unknown>, snake: string, camel: string): T {
+  return (raw[snake] ?? raw[camel]) as T;
+}
+
+function bytes(value: unknown): Uint8Array {
+  return value instanceof Uint8Array ? value : Uint8Array.from(value as number[]);
+}
+
+function schemaRecord(raw: Record<string, unknown>): SchemaRecord {
+  return {
+    schemaId: bytes(field(raw, "schema_id", "schemaId")),
+    authority: String(raw.authority), resolver: String(raw.resolver),
+    revocable: Boolean(raw.revocable), name: String(raw.name),
+    fieldDefinitions: String(field(raw, "field_definitions", "fieldDefinitions")),
+    version: Number(raw.version), createdAt: Number(field(raw, "created_at", "createdAt")),
+    schemaExpiryLedger: Number(field(raw, "schema_expiry_ledger", "schemaExpiryLedger")),
+    deprecated: Boolean(raw.deprecated),
+  };
+}
+
+function attestationRecord(raw: Record<string, unknown>): AttestationRecord {
+  return {
+    uid: bytes(raw.uid), schemaId: bytes(field(raw, "schema_id", "schemaId")),
+    issuer: String(raw.issuer),
+    stealthAddressHash: bytes(field(raw, "stealth_address_hash", "stealthAddressHash")),
+    data: bytes(raw.data), createdAt: Number(field(raw, "created_at", "createdAt")),
+    expirationLedger: Number(field(raw, "expiration_ledger", "expirationLedger")),
+    revocationLedger: Number(field(raw, "revocation_ledger", "revocationLedger")),
+    refUid: bytes(field(raw, "ref_uid", "refUid")),
+    issuanceSequence: BigInt(field(raw, "issuance_sequence", "issuanceSequence")),
+  };
+}
+
 export class SchemaRegistry {
   constructor(
     private readonly rpc: ContractInvoker,
@@ -30,6 +89,23 @@ export class SchemaRegistry {
         args: [],
       }),
     );
+  }
+
+  async getSchema(source: string, schemaId: Uint8Array): Promise<SchemaRecord> {
+    const raw = await this.rpc.readNative<Record<string, unknown>>({ source, contractId: this.contractId, method: "get_schema", args: [bytesToScVal(schemaId)] });
+    return schemaRecord(raw);
+  }
+
+  async canIssue(source: string, schemaId: Uint8Array, issuer: string): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "can_issue", args: [bytesToScVal(schemaId), addressToScVal(issuer)] }));
+  }
+
+  async isAuthorizedIssuer(source: string, schemaId: Uint8Array, issuer: string): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "is_authorized_issuer", args: [bytesToScVal(schemaId), addressToScVal(issuer)] }));
+  }
+
+  async isRevocable(source: string, schemaId: Uint8Array): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "is_revocable", args: [bytesToScVal(schemaId)] }));
   }
 
   /** Register a schema. The signer is the schema authority. */
@@ -145,6 +221,23 @@ export class AttestationEngine {
         args: [],
       }),
     );
+  }
+
+  async getAttestation(source: string, uid: Uint8Array): Promise<AttestationRecord> {
+    const raw = await this.rpc.readNative<Record<string, unknown>>({ source, contractId: this.contractId, method: "get_attestation", args: [bytesToScVal(uid)] });
+    return attestationRecord(raw);
+  }
+
+  async canIssue(source: string, schemaId: Uint8Array, issuer: string): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "can_issue", args: [bytesToScVal(schemaId), addressToScVal(issuer)] }));
+  }
+
+  async isAuthorizedIssuer(source: string, schemaId: Uint8Array, issuer: string): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "is_authorized_issuer", args: [bytesToScVal(schemaId), addressToScVal(issuer)] }));
+  }
+
+  async isRevocable(source: string, schemaId: Uint8Array): Promise<boolean> {
+    return Boolean(await this.rpc.readNative({ source, contractId: this.contractId, method: "is_revocable", args: [bytesToScVal(schemaId)] }));
   }
 
   /** Attest to a stealth identity under a schema. The signer is the issuer. */
