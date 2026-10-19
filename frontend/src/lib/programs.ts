@@ -411,24 +411,3 @@ export const ATTESTATION_ENGINE_V2_PROGRAM_ID = ATTESTATION_ENGINE_V2_CONTRACT_I
 export function hexPubkeyToBase58(hexOrAddr: string): string {
   return hexOrAddr.startsWith("G") ? hexOrAddr : hexOrAddr;
 }
-
-export async function fetchAllSchemas(): Promise<ParsedSchemaPDA[]> {
-  return [];
-}
-
-export async function fetchAllAttestations(): Promise<unknown[]> {
-  return [];
-}
-
-export async function fetchAttestationPDA(): Promise<string> {
-  return "";
-}
-
-export interface ParsedSchemaPDA {
-  schemaId: Uint8Array;
-  authority: string;
-  revocable: boolean;
-  name: string;
-  fieldDefinitions: string;
-  deprecated: boolean;
-}

@@ -19,8 +19,6 @@ import {
   type Hex,
 } from "../lib/stealth";
 import { getCluster, getNetworkPassphrase } from "../lib/chain";
-import { resolveMetaAddress } from "../lib/registry";
-import { isEnsName, resolveEnsToAddress } from "../lib/ens";
 import { getConfigForCluster } from "../contracts/contract-config";
 import { SCHEME_ID_SECP256K1 } from "../lib/contracts";
 import { getExplorerTxUrl } from "../lib/explorer";
@@ -184,28 +182,12 @@ export function PayPage() {
           return;
         }
 
-        // Handle ENS names
-        if (isEnsName(id)) {
-          const controller = await resolveEnsToAddress(id);
-          if (cancelled || !controller) {
-            if (!cancelled) setResolveStatus("not_found");
-            return;
-          }
-          const meta = await resolveMetaAddress(controller);
-          if (cancelled) return;
-          if (!meta) setResolveStatus("not_found");
-          else {
-            setResolvedMeta(meta);
-            setResolveStatus("found");
-          }
-        } else {
-          // Handle direct meta-address
-          const with0x = id.startsWith("0x") ? id : "0x" + id;
-          if (isDirectMetaAddress(with0x)) {
-            setResolvedMeta(with0x as Hex);
-            setResolveStatus("found");
-          } else setResolveStatus("not_found");
-        }
+        // Handle direct meta-address
+        const with0x = id.startsWith("0x") ? id : "0x" + id;
+        if (isDirectMetaAddress(with0x)) {
+          setResolvedMeta(with0x as Hex);
+          setResolveStatus("found");
+        } else setResolveStatus("not_found");
       } catch {
         if (!cancelled) setResolveStatus("not_found");
       }
