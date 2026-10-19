@@ -122,7 +122,7 @@ export const MITIGATIONS: ThreatMitigation[] = [
     threat: "Compromised reputation root",
     mitigation: "Emergency freeze + stale root UI",
     issue: "#85",
-    implementation: "freezePolicy.ts, ReputationDashboardView.tsx",
+    implementation: "none in this build (reputation dashboard and freeze UI removed in #1140)",
   },
   {
     id: "M13",
@@ -154,7 +154,7 @@ export const MITIGATIONS: ThreatMitigation[] = [
     id: "M16",
     threat: "Proof over-disclosure",
     mitigation: "Selective disclosure trait picker",
-    implementation: "ProveTraitModal.tsx",
+    implementation: "none in this build (ProveTraitModal removed in #1140)",
   },
   {
     id: "M17",

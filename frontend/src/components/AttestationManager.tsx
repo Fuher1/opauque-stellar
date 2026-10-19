@@ -24,7 +24,11 @@ import { announceStealthTransfer, SCHEME_ID_SECP256K1 } from "../lib/contracts";
 import { getFeatureFlags } from "../lib/featureFlags";
 import { FeatureDisabledNotice } from "./FeatureDisabledNotice";
 import { fetchAttestationUidForTransaction } from "../lib/chainSync";
-import { isMetaAddressRecipient, recipientDiscoveryMessage } from "../lib/attestationRecipients";
+import {
+  isMetaAddressRecipient,
+  recipientDiscoveryMessage,
+  recipientReference,
+} from "../lib/attestationRecipients";
 
 // =============================================================================
 // Component
@@ -306,7 +310,7 @@ export function AttestationManager({
         pushTx({
           cluster,
           kind: "trait",
-          counterparty: recipientInput.trim(),
+          counterparty: recipientReference(recipientInput),
           amountStroops: "0",
           tokenSymbol: "XLM",
           tokenAddress: null,

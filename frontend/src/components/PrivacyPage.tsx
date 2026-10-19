@@ -23,6 +23,11 @@ export function PrivacyPage() {
           sweep funds, and restore wallet state. Clearing browser storage, losing a
           device, or losing a backup password can cause permanent loss of access.
         </p>
+        <p className="mt-2">
+          Local transaction history keeps the amount, token, timestamp, transaction hash,
+          and a counterparty label. For attestations, the counterparty is a short hashed
+          reference to the recipient, not the recipient's full meta-address.
+        </p>
       </section>
 
       <section>
