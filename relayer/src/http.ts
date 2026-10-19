@@ -175,7 +175,22 @@ export function createRelayerHttpServer(
           send(res, 404, { error: "gossip unavailable" });
           return;
         }
-        await backend.publishGossipMessage(readGossipEnvelope(await readJson(req)));
+        const message = readGossipEnvelope(await readJson(req));
+        // Issue #1149: Verify gossip message authentication
+        if (message.t === "outcome") {
+          const { verifyOutcome } = await import("./messages.ts");
+          if (!verifyOutcome(message)) {
+            send(res, 401, { error: "invalid outcome signature" });
+            return;
+          }
+        } else if (message.t === "heartbeat") {
+          const { verifyHeartbeat } = await import("./messages.ts");
+          if (!verifyHeartbeat(message)) {
+            send(res, 401, { error: "invalid heartbeat signature" });
+            return;
+          }
+        }
+        await backend.publishGossipMessage(message);
         send(res, 202, { ok: true });
         return;
       }
@@ -237,6 +252,13 @@ export function createRelayerHttpServer(
       }
       // GET /v1/reconcile — return the most recent reconciliation report without re-running
       if (req.method === "GET" && url.pathname === "/v1/reconcile") {
+        // Issue #1149: Require authentication for reconcile endpoints
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+          send(res, 401, { error: "authentication required" });
+          return;
+        }
+        if (rateLimited(req, res, [limiter])) return;
         if (!backend.reconciler) {
           send(res, 404, { error: "reconciler not configured" });
           return;
@@ -251,6 +273,13 @@ export function createRelayerHttpServer(
       }
       // POST /v1/reconcile — trigger an on-demand reconciliation run and return the report
       if (req.method === "POST" && url.pathname === "/v1/reconcile") {
+        // Issue #1149: Require authentication and rate limiting for reconcile endpoints
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+          send(res, 401, { error: "authentication required" });
+          return;
+        }
+        if (rateLimited(req, res, [limiter])) return;
         if (!backend.reconciler) {
           send(res, 404, { error: "reconciler not configured" });
           return;
