@@ -143,7 +143,22 @@ export class PayoutReconciler {
     const results: JobReconciliationResult[] = [];
 
     for (const entry of entries) {
-      const onChain = await this.chain.getJob(entry.jobId).catch(() => null);
+      let onChain: Awaited<ReturnType<RelayerChainAdapter["getJob"]>>;
+      try {
+        onChain = await this.chain.getJob(entry.jobId);
+      } catch (rpcError) {
+        // Issue #1150: Treat RPC errors as unknown, not as absence
+        results.push({
+          jobId: entry.jobId,
+          outcome: "discrepancy",
+          expectedFee: entry.expectedFee.toString(),
+          onChainFee: null,
+          onChainStatus: "unknown",
+          submittedTx: entry.submittedTx,
+          detail: `RPC error during lookup: ${rpcError instanceof Error ? rpcError.message : String(rpcError)}`,
+        });
+        continue;
+      }
 
       if (!onChain || !onChain.exists) {
         results.push({
@@ -254,15 +269,18 @@ export class PayoutReconciler {
 
   /**
    * Verify restored ledger entries against chain on boot. Removes entries
-   * whose jobs are not found on-chain (stale after reorg or contract
+   * whose jobs are confirmed not found on-chain (stale after reorg or contract
    * migration) and surfaces fee/status discrepancies. Returns a
    * reconciliation report summarising the check.
+   * 
+   * Issue #1150: Only removes entries confirmed not-found; RPC errors leave entries untouched.
    */
   async verifyOnBoot(): Promise<ReconciliationReport> {
     await this.ledger.hydrate();
     const report = await this.reconcile();
     for (const d of report.discrepancies) {
-      if (d.outcome === "not_found") {
+      // Issue #1150: Only remove when confirmed not found, not on RPC errors
+      if (d.outcome === "not_found" && d.onChainStatus === null) {
         this.ledger.remove(d.jobId);
         log.warn("removed stale ledger entry", { jobId: d.jobId });
       } else if (d.outcome === "discrepancy") {

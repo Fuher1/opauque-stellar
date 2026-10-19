@@ -44,6 +44,9 @@ export type RelayerOutcome = {
   jobId: string;
   operator: string;
   result: "completed" | "failed";
+  /** Signature over the outcome message for authentication (#1148) */
+  sig: string;
+  timestamp: number;
 };
 
 /** Periodic liveness ping a relayer node gossips so the hub can detect an outage. */
@@ -51,6 +54,9 @@ export type RelayerHeartbeat = {
   t: "heartbeat";
   v: 1;
   operator: string;
+  /** Signature over the heartbeat message for authentication (#1148) */
+  sig: string;
+  timestamp: number;
 };
 
 export type RelayerMessage =
@@ -240,7 +246,9 @@ export function validateOutcome(value: unknown): RelayerOutcome {
     v.v !== 1 ||
     typeof v.jobId !== "string" ||
     typeof v.operator !== "string" ||
-    (v.result !== "completed" && v.result !== "failed")
+    (v.result !== "completed" && v.result !== "failed") ||
+    typeof v.sig !== "string" ||
+    typeof v.timestamp !== "number"
   ) {
     throw new Error("Invalid relayer outcome.");
   }
@@ -250,10 +258,80 @@ export function validateOutcome(value: unknown): RelayerOutcome {
 
 export function validateHeartbeat(value: unknown): RelayerHeartbeat {
   const v = value as Partial<RelayerHeartbeat>;
-  if (v?.t !== "heartbeat" || v.v !== 1 || typeof v.operator !== "string") {
+  if (
+    v?.t !== "heartbeat" ||
+    v.v !== 1 ||
+    typeof v.operator !== "string" ||
+    typeof v.sig !== "string" ||
+    typeof v.timestamp !== "number"
+  ) {
     throw new Error("Invalid relayer heartbeat.");
   }
   return v as RelayerHeartbeat;
+}
+
+const OUTCOME_DOMAIN = new TextEncoder().encode("opaque-relayer-outcome-v1");
+const HEARTBEAT_DOMAIN = new TextEncoder().encode("opaque-relayer-heartbeat-v1");
+
+/** Signing digest for outcome messages (#1148) */
+export function outcomeSigningDigest(
+  jobId: Uint8Array,
+  operator: string,
+  result: "completed" | "failed",
+  timestamp: number,
+): Uint8Array {
+  const resultByte = new Uint8Array([result === "completed" ? 1 : 0]);
+  return keccak_256(
+    concatBytes(
+      OUTCOME_DOMAIN,
+      assertLength(jobId, 32, "jobId"),
+      new TextEncoder().encode(operator),
+      resultByte,
+      uint64BE(BigInt(timestamp)),
+    ),
+  );
+}
+
+/** Signing digest for heartbeat messages (#1148) */
+export function heartbeatSigningDigest(operator: string, timestamp: number): Uint8Array {
+  return keccak_256(
+    concatBytes(
+      HEARTBEAT_DOMAIN,
+      new TextEncoder().encode(operator),
+      uint64BE(BigInt(timestamp)),
+    ),
+  );
+}
+
+/** Verify outcome signature (#1148) */
+export function verifyOutcome(outcome: RelayerOutcome): boolean {
+  try {
+    const digest = outcomeSigningDigest(
+      hexToBytes(outcome.jobId),
+      outcome.operator,
+      outcome.result,
+      outcome.timestamp,
+    );
+    return Keypair.fromPublicKey(outcome.operator).verify(
+      Buffer.from(digest),
+      Buffer.from(base64ToBytes(outcome.sig)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Verify heartbeat signature (#1148) */
+export function verifyHeartbeat(heartbeat: RelayerHeartbeat): boolean {
+  try {
+    const digest = heartbeatSigningDigest(heartbeat.operator, heartbeat.timestamp);
+    return Keypair.fromPublicKey(heartbeat.operator).verify(
+      Buffer.from(digest),
+      Buffer.from(base64ToBytes(heartbeat.sig)),
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function validatePayload(value: unknown): EncryptedPayload {

@@ -293,6 +293,11 @@ export class RelayerEngine {
         if (hashPoolWithdrawPayloadHex(payload).toLowerCase() !== job.payloadHash.toLowerCase()) {
           throw new Error("Payload hash mismatch.");
         }
+        // Issue #1151: Re-check deadline headroom before accepting
+        if (!(await this.hasDeadlineHeadroom(job.deadline))) {
+          this.stats.deadlineDeclined += 1;
+          return null;
+        }
         await this.cfg.chain.simulatePoolWithdraw(payload);
         const acceptedTx = await this.cfg.chain.acceptJob(payloadMsg.jobId);
         acceptedJob = true;
