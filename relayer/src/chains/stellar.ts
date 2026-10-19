@@ -1,4 +1,3 @@
-// @ts-nocheck
 import {
   Address,
   BASE_FEE,
@@ -97,6 +96,7 @@ export class StellarRelayerChain implements RelayerChainAdapter {
       fee: BigInt(native.fee),
       deadline: Number(native.deadline_ledger),
       payloadHash: `0x${Buffer.from(native.payload_hash).toString("hex")}`,
+      acceptedRelayer: native.accepted_relayer ?? null,
     };
   }
 

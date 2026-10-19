@@ -1,0 +1,109 @@
+name: Testnet smoke
+
+# Runs the frontend's testnet smoke scripts against the live Stellar testnet deployment on a
+# schedule, so regressions surface before users hit them. Each script runs as its own matrix
+# leg. A failing leg uploads its full log as an artifact and opens (or comments on) a tracking
+# issue with the last lines of the log, which alerts maintainers.
+#
+# Required secrets:
+#   SMOKE_DEPLOYER_SECRET  secret key of a funded Stellar testnet account (used by the scripts
+#                          that register schemas, deposit, and publish roots)
+#   SMOKE_RELAYER_ENDPOINT relayer gateway URL for smoke:pool:relayer
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testnet-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: ${{ matrix.script }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - script: smoke:payments
+            slug: payments
+          - script: smoke:pool
+            slug: pool
+          - script: smoke:pool:relayer
+            slug: pool-relayer
+          - script: smoke:reputation
+            slug: reputation
+          - script: smoke:realset
+            slug: realset
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+
+      - name: Fetch circuit artifacts
+        # Best-effort, as in scripts/prepare-frontend-artifacts.ts. A missing artifact then
+        # fails the smoke script itself, with its own log.
+        working-directory: frontend
+        run: npx tsx ../scripts/fetch-circuit-artifacts.ts || echo "::warning::Circuit artifact fetch incomplete"
+
+      - name: Run ${{ matrix.script }}
+        working-directory: frontend
+        env:
+          SCRIPT: ${{ matrix.script }}
+          SLUG: ${{ matrix.slug }}
+          DEPLOYER_SECRET: ${{ secrets.SMOKE_DEPLOYER_SECRET }}
+          RELAYER_ENDPOINT: ${{ secrets.SMOKE_RELAYER_ENDPOINT }}
+        run: |
+          set -o pipefail
+          mkdir -p ../smoke-logs
+          npm run "$SCRIPT" 2>&1 | tee "../smoke-logs/$SLUG.log"
+
+      - name: Upload smoke log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: smoke-log-${{ matrix.slug }}
+          path: smoke-logs/${{ matrix.slug }}.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Alert maintainers
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPT: ${{ matrix.script }}
+          SLUG: ${{ matrix.slug }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Testnet smoke failing: ${SCRIPT}"
+          {
+            printf 'The scheduled testnet smoke script `%s` failed.\n\nRun: %s\n\n' "$SCRIPT" "$RUN_URL"
+            printf 'The full log is attached to the run as the `smoke-log-%s` artifact. Last 120 lines:\n\n' "$SLUG"
+            printf '<details><summary>Log tail</summary>\n\n```\n'
+            tail -n 120 "smoke-logs/$SLUG.log" 2>/dev/null || printf '(no log captured)\n'
+            printf '\n```\n</details>\n'
+          } | head -c 60000 > alert.md
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file alert.md
+          else
+            gh issue create --title "$title" --body-file alert.md
+          fi

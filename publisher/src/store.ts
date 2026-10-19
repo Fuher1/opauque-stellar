@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { readJson, writeAtomic } from "../../shared/atomic-file.ts";
 import { normalizeHex32 } from "./bytes.ts";
 import { validateLeafCommitment } from "./validate.ts";
 import type { LeafCommitment, PublisherState, QuarantinedFile } from "./types.ts";
@@ -56,13 +57,13 @@ export class FileStore implements Store {
   load(verifierId: string): PublisherState | null {
     const p = this.statePath(verifierId);
     if (!existsSync(p)) return null;
-    return JSON.parse(readFileSync(p, "utf8")) as PublisherState;
+    return readJson<PublisherState>(p);
   }
 
   save(state: PublisherState): void {
     const p = this.statePath(state.verifierId);
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, `${JSON.stringify(state, null, 2)}\n`);
+    writeAtomic(p, `${JSON.stringify(state, null, 2)}\n`);
   }
 
   inboxSize(): number {
@@ -107,7 +108,7 @@ export class FileStore implements Store {
     const ts = Date.now().toString(36);
     const p = join(this.inboxDir(), `${ts}_${safeId}.json`);
     mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, `${JSON.stringify(commitment, null, 2)}\n`);
+    writeAtomic(p, `${JSON.stringify(commitment, null, 2)}\n`);
     return true;
   }
 
@@ -125,7 +126,13 @@ export class FileStore implements Store {
         if (wanted.has(commitment.id)) {
           renameSync(p, join(this.archiveDir(), name));
         }
-      } catch {
+      } catch (err) {
+        this.quarantineFile(
+          name,
+          { parseError: true },
+          [`parse error: ${err instanceof Error ? err.message : String(err)}`],
+          () => new Date().toISOString(),
+        );
         unlinkSync(p);
       }
     }
@@ -141,7 +148,7 @@ export class FileStore implements Store {
       quarantinedAt: now(),
     };
     const safeName = filename.replace(/[^a-z0-9_.-]/gi, "_");
-    writeFileSync(join(dir, `${safeName}.json`), `${JSON.stringify(entry, null, 2)}\n`);
+    writeAtomic(join(dir, `${safeName}.json`), `${JSON.stringify(entry, null, 2)}\n`);
   }
 
   listQuarantine(): QuarantinedFile[] {

@@ -8,8 +8,8 @@
  * the reconstructed `stateLeaves` + `depositIndices` (and the prover validates the
  * note against them). This keeps the prover pure and offline-testable.
  *
- * v1 supports FULL withdrawals (remainder = 0); the change leaf is a throwaway
- * zero-value commitment.
+ * Supports full and partial withdrawals. Partial withdrawals create a fresh
+ * change commitment that the caller must persist with the returned secrets.
  */
 import { Address } from "@stellar/stellar-sdk";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -120,6 +120,7 @@ export interface PoolWithdrawProof {
   aspRoot: Uint8Array;
   nullifierHash: Uint8Array;
   newCommitment: Uint8Array;
+  change: { nullifier: string; secret: string; value: bigint };
 }
 
 interface SnarkjsLike {
@@ -129,7 +130,14 @@ interface SnarkjsLike {
       wasm: string | Uint8Array,
       zkey: string | Uint8Array,
     ): Promise<{ proof: Groth16ProofLike; publicSignals: string[] }>;
+    verify?(vkey: unknown, publicSignals: string[], proof: Groth16ProofLike): Promise<boolean>;
   };
+  zKey?: { exportVerificationKey(zkey: string | Uint8Array): Promise<unknown> };
+}
+
+export interface ProveProgress { stage: "witness" | "artifacts" | "proving" | "verifying" | "complete"; }
+function checkAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException("Proof generation was cancelled", "AbortError");
 }
 
 async function loadSnarkjs(): Promise<SnarkjsLike> {
@@ -151,6 +159,7 @@ export interface PoolWithdrawWitness {
   aspRoot: bigint;
   nullifierHash: bigint;
   newCommitment: bigint;
+  change: { nullifier: string; secret: string; value: bigint };
 }
 
 /**
@@ -184,6 +193,7 @@ export async function buildPoolWithdrawWitness(opts: {
   scope: number;
   stateLeaves: bigint[];
   depositIndices: number[];
+  withdrawnValue?: bigint;
   /**
    * Pre-fetched ASP inclusion path for this note's label (#972). When given,
    * `depositIndices` is only used to look the label up, not to rebuild the tree.
@@ -192,8 +202,9 @@ export async function buildPoolWithdrawWitness(opts: {
 }): Promise<PoolWithdrawWitness> {
   const { note } = opts;
   const value = BigInt(note.value);
-  const withdrawnValue = value; // full withdrawal
-  const remainder = 0n;
+  const withdrawnValue = opts.withdrawnValue ?? value;
+  if (withdrawnValue <= 0n || withdrawnValue > value) throw new Error("withdrawnValue must be greater than zero and no greater than the note value");
+  const remainder = value - withdrawnValue;
 
   const poseidon = await getPoseidon();
   const h = (xs: bigint[]) => hashFields(poseidon, xs);
@@ -286,6 +297,7 @@ export async function buildPoolWithdrawWitness(opts: {
     aspRoot,
     nullifierHash,
     newCommitment,
+    change: { ...change, value: remainder },
   };
 }
 
@@ -303,6 +315,7 @@ function finishPoolWithdrawProof(
     aspRoot: bigIntToBytes32(witness.aspRoot),
     nullifierHash: bigIntToBytes32(witness.nullifierHash),
     newCommitment: bigIntToBytes32(witness.newCommitment),
+    change: witness.change,
   };
 }
 
@@ -326,17 +339,30 @@ export async function provePoolWithdraw(opts: {
   depositIndices: number[];
   /** Pre-fetched ASP inclusion path for this note's label (#972). */
   aspInclusion?: AspWitnessInclusion;
+  withdrawnValue?: bigint;
   artifacts: ArtifactResolver;
   snarkjs?: SnarkjsLike;
+  signal?: AbortSignal;
+  onProgress?: (progress: ProveProgress) => void;
 }): Promise<PoolWithdrawProof> {
+  checkAborted(opts.signal); opts.onProgress?.({ stage: "witness" });
   const witness = await buildPoolWithdrawWitness(opts);
   const snarkjs = opts.snarkjs ?? (await loadSnarkjs());
+  checkAborted(opts.signal); opts.onProgress?.({ stage: "artifacts" });
   const [wasm, zkey] = await Promise.all([
     opts.artifacts.resolve("pool-v3", "wasm"),
     opts.artifacts.resolve("pool-v3", "zkey"),
   ]);
-  const { proof } = await snarkjs.groth16.fullProve(witness.input, wasm, zkey);
-  return finishPoolWithdrawProof(witness, proof);
+  checkAborted(opts.signal); opts.onProgress?.({ stage: "proving" });
+  const result = await snarkjs.groth16.fullProve(witness.input, wasm, zkey);
+  checkAborted(opts.signal);
+  if (snarkjs.groth16.verify && snarkjs.zKey?.exportVerificationKey) {
+    opts.onProgress?.({ stage: "verifying" });
+    const valid = await snarkjs.groth16.verify(await snarkjs.zKey.exportVerificationKey(zkey), result.publicSignals, result.proof);
+    if (!valid) throw new Error("Locally generated proof failed Groth16 verification");
+  }
+  opts.onProgress?.({ stage: "complete" });
+  return finishPoolWithdrawProof(witness, result.proof);
 }
 
 /** One note to prove in a {@link provePoolWithdrawBatch} call. */
@@ -350,6 +376,7 @@ export interface PoolWithdrawBatchJob {
   depositIndices: number[];
   /** Pre-fetched ASP inclusion path for this note's label (#972). */
   aspInclusion?: AspWitnessInclusion;
+  withdrawnValue?: bigint;
 }
 
 /**
@@ -366,7 +393,10 @@ export async function provePoolWithdrawBatch(opts: {
   snarkjs?: SnarkjsLike;
   /** `false` forces serial proving; omit to auto-detect a worker pool. */
   pool?: ProofPoolOptions | false;
+  signal?: AbortSignal;
+  onProgress?: (completed: number, total: number) => void;
 }): Promise<PoolWithdrawProof[]> {
+  checkAborted(opts.signal);
   const witnesses = await Promise.all(
     opts.jobs.map((job) =>
       buildPoolWithdrawWitness({
@@ -378,6 +408,7 @@ export async function provePoolWithdrawBatch(opts: {
         stateLeaves: job.stateLeaves,
         depositIndices: job.depositIndices,
         aspInclusion: job.aspInclusion,
+        withdrawnValue: job.withdrawnValue,
       }),
     ),
   );
@@ -392,5 +423,5 @@ export async function provePoolWithdrawBatch(opts: {
     { snarkjs: opts.snarkjs, pool: opts.pool },
   );
 
-  return results.map((r, i) => finishPoolWithdrawProof(witnesses[i], r.proof));
+  return results.map((r, i) => { checkAborted(opts.signal); opts.onProgress?.(i + 1, results.length); return finishPoolWithdrawProof(witnesses[i], r.proof); });
 }

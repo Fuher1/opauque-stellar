@@ -5,6 +5,10 @@ import { KeyRotationWizard } from "../../components/security/KeyRotationWizard";
 import { ErrorReportingSettings } from "../../components/ErrorReportingSettings";
 import { SigningAuditLogSettings } from "../../components/SigningAuditLogSettings";
 import { StorageEncryptionSettings } from "../../components/StorageEncryptionSettings";
+import { MotionSettings } from "../../components/MotionSettings";
+import { LanguageSettings } from "../../components/LanguageSettings";
+import { ProofDiagnosticsPanel } from "../../components/ProofDiagnosticsPanel";
+import { SessionTimeoutSettings } from "../../components/security/SessionTimeoutSettings";
 
 export const SecuritySettings: React.FC = () => {
   return (

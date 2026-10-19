@@ -8,10 +8,13 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createEncryptedStorage } from "../lib/encryptedStorage";
 import { getEncryptionPassphrase } from "../lib/getEncryptionPassphrase";
+import { RECIPIENT_REFERENCE_PREFIX, recipientReference } from "../lib/attestationRecipients";
 type Address = string;
 
 const MAX_ITEMS_PER_CLUSTER = 50;
 const STORAGE_KEY = "opaque-tx-history";
+/** v1: trait entries hold a hashed recipient reference instead of the raw recipient input. */
+const STORAGE_VERSION = 1;
 
 const hasRehydratedRef = { current: false };
 
@@ -55,6 +58,29 @@ export function maskCounterparty(value: string): string {
   const v = value.trim();
   if (v.length <= 24 || v.includes("…")) return v;
   return `${v.slice(0, 10)}…${v.slice(-6)}`;
+}
+
+/**
+ * v0 → v1: attestation entries stored the raw recipient (a stealth meta-address) as the
+ * counterparty. Replace it with a hashed reference. Entries already reduced are left alone,
+ * so running this more than once is harmless.
+ */
+function reduceTraitCounterparties(state: TxHistoryState): TxHistoryState {
+  const byChain: Record<string, TxHistoryEntry[]> = {};
+  for (const [key, list] of Object.entries(state.byChain ?? {})) {
+    if (!Array.isArray(list)) {
+      byChain[key] = list;
+      continue;
+    }
+    byChain[key] = list.map((e) =>
+      e.kind === "trait" &&
+      typeof e.counterparty === "string" &&
+      !e.counterparty.startsWith(RECIPIENT_REFERENCE_PREFIX)
+        ? { ...e, counterparty: recipientReference(e.counterparty) }
+        : e,
+    );
+  }
+  return { ...state, byChain };
 }
 
 /** Composite key: account:cluster */
@@ -179,12 +205,13 @@ export const useTxHistoryStore = create<TxHistoryState>()(
     {
       name: STORAGE_KEY,
       storage: txHistoryStorage,
+      version: STORAGE_VERSION,
       onRehydrateStorage: () => (_state, _err) => {
         hasRehydratedRef.current = true;
       },
-      // Migrate plaintext data to encrypted when passphrase becomes available
-      migrate: async (persistedState: unknown, version: number) => {
-        return persistedState;
+      migrate: (persistedState, version) => {
+        const state = persistedState as TxHistoryState;
+        return version < 1 ? reduceTraitCounterparties(state) : state;
       },
     },
   ),

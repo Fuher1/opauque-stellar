@@ -8,6 +8,7 @@
 export function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;
   if (h.length % 2) throw new Error("Invalid hex length");
+  if (!/^[0-9a-fA-F]*$/.test(h)) throw new Error("Invalid hex characters");
   const out = new Uint8Array(h.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
